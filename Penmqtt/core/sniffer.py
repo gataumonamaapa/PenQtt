@@ -18,18 +18,18 @@ class Sniffer:
     def sniff_broker_from_iot(self, iot_ip, duration=30):
         def callback(pkt):
             if IP in pkt and TCP in pkt:
-                if pkt[TCP].dport in [1883, 8883]:
-                    self.sniffed_brokers.add((pkt[IP].dst, pkt[TCP].dport))
-                elif pkt[TCP].sport in [1883, 8883]:
-                    self.sniffed_brokers.add((pkt[IP].src, pkt[TCP].sport))
+                if pkt[IP].src == iot_ip or pkt[IP].dst == iot_ip:
+                    if pkt[TCP].dport in [1883, 8883]:
+                        self.sniffed_brokers.add((pkt[IP].dst, pkt[TCP].dport))
+                    elif pkt[TCP].sport in [1883, 8883]:
+                        self.sniffed_brokers.add((pkt[IP].src, pkt[TCP].sport))
 
         self.log(f"[*] Sniffing paket dari {iot_ip} di interface {self.interface} selama {duration} detik...")
         sniff(iface=self.interface, filter="tcp port 1883 or 8883", prn=callback, timeout=duration)
 
         if not self.sniffed_brokers:
             self.log("[!] Tidak ada broker terdeteksi dari sniffing, mencoba fallback scan...")
-            fallback = self.scan_mqtt_ports_fallback()
-            self.sniffed_brokers.update(fallback)
+            return self.scan_mqtt_ports_fallback()
 
         return list(self.sniffed_brokers)
 
@@ -44,14 +44,10 @@ class Sniffer:
         mqtt_hosts = []
         for host in nm.all_hosts():
             if 'tcp' in nm[host]:
-                if 1883 in nm[host]['tcp']:
-                    port=1883
-                    mqtt_hosts.append((host, port))
-                    
-                if 8883 in nm[host]['tcp']:
-                    port=8883
-                    mqtt_hosts.append((host, port))
-                    
+                if 1883 in nm[host]['tcp'] and nm[host]['tcp'][1883]['state'] == 'open':
+                    mqtt_hosts.append((host, 1883))
+                if 8883 in nm[host]['tcp'] and nm[host]['tcp'][8883]['state'] == 'open':
+                    mqtt_hosts.append((host, 8883))
 
         self.log(f"[✓] MQTT broker ditemukan (fallback): {mqtt_hosts}")
         return mqtt_hosts

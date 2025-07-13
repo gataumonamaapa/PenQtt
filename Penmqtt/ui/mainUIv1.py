@@ -635,7 +635,8 @@ class PenMQTT(QMainWindow):
             self._update_attack_report(f"[✓] Menggunakan input manual: {username}:{password}\n")
 
             if broker_ip and enum:
-                topics = enum.enum(broker_ip, username, password, port=port)
+                use_tls = (port == 8883)
+                topics = enum.enum(broker_ip, username, password, port=port, use_tls=use_tls)
                 self.controller.topics = topics
 
             self.add_log_entry(
@@ -861,17 +862,17 @@ class PentestWorker(QObject):
                     return
 
             self.log.emit("➤ Jalankan Fuzzing...\n")
-            fuzzer = Fuzzer(broker_ip, *credentials, logger=lambda msg: self.log.emit(msg))
+            fuzzer = Fuzzer(broker_ip,port, *credentials, logger=lambda msg: self.log.emit(msg))
             fuzzer.run(topics)
             self.log_entry.emit(self.device_name, "Fuzzing", f"Device selected: {self.ip}", "Succeed")
 
             self.log.emit("➤ Uji Delay QoS...\n")
-            qos = QoSTester(broker_ip, *credentials, logger=lambda msg: self.log.emit(msg))
+            qos = QoSTester(broker_ip,port, *credentials, logger=lambda msg: self.log.emit(msg))
             qos_summary = qos.run()
             self.log_entry.emit(self.device_name, "QoS", f"Device selected: {self.ip}", "Succeed")
 
             self.log.emit("➤ Jalankan Subscribe Flood (DoS)...\n")
-            dos = DoSFlooder(broker_ip, *credentials, logger=lambda msg: self.log.emit(msg))
+            dos = DoSFlooder(broker_ip,port, *credentials, logger=lambda msg: self.log.emit(msg))
             dos.run()
 
             self.log.emit("➤ Membuat laporan...\n")

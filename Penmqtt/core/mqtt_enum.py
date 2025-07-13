@@ -1,12 +1,14 @@
 import socket
 import time
+import ssl
 from paho.mqtt import client as mqtt
 from core.brute_force import BruteForcer
 from core.tls_utils import setup_tls_context
 
 class MQTTEnumerator:
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, allow_insecure=True):
         self.logger = logger
+        self.allow_insecure = allow_insecure  # kontrol apakah gunakan TLS insecure
         self.valid_credentials = None
 
     def log(self, message):
@@ -71,11 +73,11 @@ class MQTTEnumerator:
         try:
             client = mqtt.Client()
 
-            if username is not None and password is not None:
+            if username and password:
                 client.username_pw_set(username, password)
 
             if use_tls:
-                client.tls_set_context(setup_tls_context())
+                setup_tls_context(client, allow_insecure=self.allow_insecure, logger=self.logger)
 
             def on_message(client, userdata, msg):
                 topic = msg.topic
@@ -93,17 +95,15 @@ class MQTTEnumerator:
             client.disconnect()
 
             if not topics and not (username and password):
-                if use_tls:
-                    return self.brute_force_tls(broker_ip, port)
-                else:
-                    return self.brute_force_plain(broker_ip, port)
+                return self.brute_force_tls(broker_ip, port) if use_tls else self.brute_force_plain(broker_ip, port)
 
+        except ssl.SSLError as ssl_err:
+            self.log(f"[!] TLS Error: {ssl_err}")
+            if not (username and password):
+                return self.brute_force_tls(broker_ip, port)
         except Exception as e:
             self.log(f"[!] Gagal enum topik: {e}")
             if not (username and password):
-                if use_tls:
-                    return self.brute_force_tls(broker_ip, port)
-                else:
-                    return self.brute_force_plain(broker_ip, port)
+                return self.brute_force_tls(broker_ip, port) if use_tls else self.brute_force_plain(broker_ip, port)
 
         return topics
