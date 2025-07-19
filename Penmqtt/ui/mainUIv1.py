@@ -30,12 +30,12 @@ from wifiget import get_network_name
 # Core modules (local imports)
 from core.sniffer import Sniffer
 from core.network_scanner import NetworkScanner
-from core.brute_force import BruteForcer
 from core.dos_flodder import DoSFlooder
 from core.mqtt_enum import MQTTEnumerator
 from core.fuzzer import Fuzzer
 from core.qos_delay import QoSTester
 from core.report import ReportGenerator
+from core.acl_checker import AclCheck 
 
 
 def safe_set_label_text(label, text):
@@ -209,26 +209,6 @@ class PenMQTT(QMainWindow):
         self.pass_input.setEchoMode(QLineEdit.Password)
         self.pass_input.setStyleSheet("color: white;")
         cred_layout.addWidget(self.pass_input)
-
-        # File input for certificate or config
-        file_label = QLabel("TLS File:")
-        file_label.setStyleSheet("color: black;")
-        cred_layout.addWidget(file_label)
-
-        file_input_layout = QHBoxLayout()
-        self.file_path_input = QLineEdit()
-        self.file_path_input.setPlaceholderText("Fill When Needed")
-        self.file_path_input.setReadOnly(True)
-        self.file_path_input.setStyleSheet("color : white")
-
-        browse_button = QPushButton("Browse")
-        browse_button.setObjectName("browseButton")
-        browse_button.setStyleSheet("border: 1px solid black;")
-        browse_button.clicked.connect(self.browse_file)
-
-        file_input_layout.addWidget(self.file_path_input)
-        file_input_layout.addWidget(browse_button)
-        cred_layout.addLayout(file_input_layout)
         
         enter_layout = QHBoxLayout()
         enter_layout.addStretch()
@@ -384,11 +364,6 @@ class PenMQTT(QMainWindow):
         scan_button.clicked.connect(self.scan_network)
         enter_button.clicked.connect(self.prompt_manual_credentials)
         self.pentest_running = False
-        
-    def browse_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select File", "", "All Files (*)")
-        if file_path:
-            self.file_path_input.setText(file_path)
 
     def handle_log_selection(self, row, column):  # def ini  juga Tambahan baru
         device_name = self.log_table.item(row, 0).text()
@@ -610,7 +585,7 @@ class PenMQTT(QMainWindow):
         # Process events to update UI
         QApplication.processEvents()
 
-    def prompt_manual_credentials(self, require_prompt=False, broker_ip=None, enum=None, port=None):
+    def prompt_manual_credentials(self, broker_ip=None, enum=None, port=None, require_prompt=False):
         if not hasattr(self, 'current_device') or self.current_device is None:
             QMessageBox.warning(self, "No Device Selected", "Please select a device first.")
             return
@@ -637,7 +612,7 @@ class PenMQTT(QMainWindow):
             if broker_ip and enum:
                 use_tls = (port == 8883)
                 topics = enum.enum(broker_ip, username, password, port=port, use_tls=use_tls)
-                self.controller.topics = topics
+                self.topics = topics
 
             self.add_log_entry(
                 self.current_device['name'],
@@ -694,6 +669,10 @@ class PenMQTT(QMainWindow):
         
         # Scroll to the newest entry
         self.log_table.scrollToBottom()
+        
+    def stop_automated_status_cycle(self):
+        pass
+
 
     def select_device(self, device):
         if self.pentest_running:
@@ -804,6 +783,7 @@ class PentestWorker(QObject):
         try:
             self.log.emit("Menjalankan pentest bertahap...\n")
             self.status.emit("Running...")
+            acl_summary = "Pengecekan ACL tidak dilakukan."
 
             if getattr(self, "waiting_for_manual", False):
                 self.waiting_for_manual = False
@@ -850,6 +830,7 @@ class PentestWorker(QObject):
                     credentials = enum.valid_credentials
                     self.log.emit(f"[✓] Menggunakan kredensial enum: {credentials[0]}:{credentials[1]}\n")
                     self.log_entry.emit(self.device_name, "BruteForce", f"Kredensial: {credentials[0]}:{credentials[1]}", "Succeed")
+
                 elif topics:
                     credentials = (None, None)
                 else:
@@ -860,12 +841,18 @@ class PentestWorker(QObject):
                     self.need_manual_credentials.emit(broker_ip, enum, port)
                     self.log_entry.emit(self.device_name, "BruteForce", f"Device selected: {self.ip}", "Failed")
                     return
-
+                
+            self.log.emit("➤ Menjalankan Pengecekan ACL...\n")
+            acl_checker = AclCheck(host=broker_ip, port=port)
+            acl_summary = acl_checker.run() # Jalankan dan simpan hasilnya
+            self.log.emit(acl_summary + "\n\n") # Tampilkan hasil di log UI
+            self.log_entry.emit(self.device_name, "ACL Check", f"Pengecekan pada {broker_ip}", "Succeed")   
+            
             self.log.emit("➤ Jalankan Fuzzing...\n")
             fuzzer = Fuzzer(broker_ip,port, *credentials, logger=lambda msg: self.log.emit(msg))
             fuzzer.run(topics)
             self.log_entry.emit(self.device_name, "Fuzzing", f"Device selected: {self.ip}", "Succeed")
-
+                    
             self.log.emit("➤ Uji Delay QoS...\n")
             qos = QoSTester(broker_ip,port, *credentials, logger=lambda msg: self.log.emit(msg))
             qos_summary = qos.run()
@@ -885,8 +872,11 @@ class PentestWorker(QObject):
                 topics=topics,
                 fuzz_count=20,
                 flood_info={"topic_count": "1000", "messages_per_topic": "3000"},
-                qos_delay_summary=qos_summary
+                qos_delay_summary=qos_summary,
+                use_tls=(port == 8883),
+                acl_summary=acl_summary  # <- Tambahan ini
             )
+
             ReportDatabase.save_report(broker_ip, report_path)
 
             self.status.emit("Succeed")

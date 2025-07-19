@@ -1,5 +1,7 @@
-from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from datetime import datetime
 
 class ReportGenerator:
@@ -11,47 +13,58 @@ class ReportGenerator:
         if self.logger:
             self.logger(msg)
 
-    def generate(self, broker_ip, username, password, topics, fuzz_count, flood_info, qos_delay_summary):
-        c = canvas.Canvas(self.filename, pagesize=A4)
-        width, height = A4
-        self.log("[Report] Membuat cover...")
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(50, height - 50, "Laporan Simulasi Serangan MQTT")
-        c.setFont("Helvetica", 12)
-        c.drawString(50, height - 80, f"Tanggal: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        c.drawString(50, height - 100, f"Broker IP: {broker_ip}")
-        c.drawString(50, height - 120, f"Username: {username or 'N/A'}")
-        c.drawString(50, height - 140, f"Password: {password or 'N/A'}")
+    def generate(self, broker_ip, username, password, topics,
+                 fuzz_count, flood_info, qos_delay_summary,
+                 use_tls=False, acl_summary=False, device_name="Perangkat IoT"):
 
-        self.log("[Report] Menambahkan statistik...")
-        c.drawString(50, height - 170, "Topik yang Disadap:")
-        y = height - 190
-        for t in list(topics)[:10]:
-            c.drawString(70, y, f"- {t}")
-            y -= 15
-            if y < 100:
-                c.showPage()
-                y = height - 50
+        doc = SimpleDocTemplate(self.filename, pagesize=A4)
+        styles = getSampleStyleSheet()
+        story = []
 
-        c.drawString(50, y - 20, f"Jumlah Payload Fuzzing Dikirim: {fuzz_count}")
-        y -= 40
-        c.drawString(50, y, "Info Subscribe Flood:")
-        c.drawString(70, y - 15, f"Topik: {flood_info['topic_count']}")
-        c.drawString(70, y - 30, f"Pesan per Topik: {flood_info['messages_per_topic']}")
-        y -= 50
-        c.drawString(50, y, "Ringkasan Delay Maksimum per QoS:")
-        y -= 20
-        for qos_level, delay in qos_delay_summary.items():
-            if delay == -1:
-                text = f"QoS {qos_level} : Gagal"
-            else:
-                text = f"QoS {qos_level} : {delay:.3f} detik"
-            c.drawString(70, y, text)
-            y -= 15
-            if y < 100:
-                c.showPage()
-                y = height - 50
+        story.append(Paragraph("LAPORAN HASIL SIMULASI PENGUJIAN KEAMANAN MQTT", styles['Title']))
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"Nama Perangkat: {device_name}", styles['Normal']))
+        story.append(Paragraph(f"IP Broker: {broker_ip}", styles['Normal']))
+        story.append(Paragraph(f"Tanggal: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+        story.append(Spacer(1, 12))
 
-        c.showPage()
-        c.save()
-        print(f"[✓] Laporan PDF disimpan sebagai {self.filename}")
+        story.append(Paragraph("<b>Sistem Keamanan yang Terdeteksi</b>", styles['Heading3']))
+        if username and password:
+            story.append(Paragraph("- Username dan Password", styles['Normal']))
+        if use_tls:
+            story.append(Paragraph("- TLS (Transport Layer Security)", styles['Normal']))
+        if acl_summary:
+            story.append(Paragraph("- ACL (Access Control List)", styles['Normal']))
+        story.append(Spacer(1, 12))
+
+        story.append(Paragraph("<b>Rincian Hasil Pengujian</b>", styles['Heading3']))
+        qos_str = ", ".join([
+            f"QoS {qos}: {'Gagal' if delay == -1 else f'{delay:.3f}s'}"
+            for qos, delay in qos_delay_summary.items()
+        ])
+
+        table_data = [
+            ["Jenis Pengujian", "Deskripsi Singkat", "Hasil Utama"],
+            ["Enumerasi Topik", "Mencoba akses semua topik menggunakan kredensial tersedia", f"{len(topics)} topik ditemukan"],
+            ["Brute Force", "Mencoba semua kombinasi username/password", f"{username}:{password}" if username and password else "Tidak ditemukan"],
+            ["TLS Detection", "Analisis apakah broker menggunakan TLS", "Ya" if use_tls else "Tidak"],
+            ["Fuzzing Payload", f"Kirim {fuzz_count} payload acak ke topik MQTT", "Berhasil dikirim ke semua topik"],
+            ["Subscribe Flood (DoS)", f"Kirim {flood_info['messages_per_topic']} pesan ke {flood_info['topic_count']} topik", "Dilakukan"],
+            ["QoS Delay Test", "Ukur waktu kirim pesan pada berbagai QoS", qos_str]
+        ]
+
+        table = Table(table_data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ]))
+        story.append(table)
+
+        doc.build(story)
+        print(f"[✓] Laporan RPP-style PDF disimpan sebagai {self.filename}")
