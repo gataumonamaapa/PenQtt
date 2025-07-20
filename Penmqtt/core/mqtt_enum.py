@@ -10,6 +10,8 @@ class MQTTEnumerator:
         self.logger = logger
         self.allow_insecure = allow_insecure  # kontrol apakah gunakan TLS insecure
         self.valid_credentials = None
+        self.last_successful_client = None
+
 
     def log(self, message):
         if self.logger:
@@ -28,12 +30,13 @@ class MQTTEnumerator:
 
             client.on_message = on_message
             client.connect(broker_ip, port, 60)
+            self.last_successful_client = client
             client.subscribe("#")
             client.loop_start()
             self.log("[*] Mencoba enum tanpa kredensial...")
             time.sleep(5)
             client.loop_stop()
-            client.disconnect()
+           
             return topics
         except Exception as e:
             self.log(f"[!] Gagal konek tanpa kredensial: {e}")
@@ -87,12 +90,13 @@ class MQTTEnumerator:
 
             client.on_message = on_message
             client.connect(broker_ip, port, 60)
+            self.last_successful_client = client
             client.subscribe("#")
             client.loop_start()
             self.log("[*] Mendengarkan pesan selama 5 detik...")
             time.sleep(5)
             client.loop_stop()
-            client.disconnect()
+
 
             if not topics and not (username and password):
                 return self.brute_force_tls(broker_ip, port) if use_tls else self.brute_force_plain(broker_ip, port)
@@ -107,3 +111,10 @@ class MQTTEnumerator:
                 return self.brute_force_tls(broker_ip, port) if use_tls else self.brute_force_plain(broker_ip, port)
 
         return topics
+    
+    def cleanup(self):
+        """Disconnect setelah semua modul selesai menggunakan koneksi."""
+        if self.last_successful_client and self.last_successful_client.is_connected():
+            self.last_successful_client.loop_stop()
+            self.last_successful_client.disconnect()
+

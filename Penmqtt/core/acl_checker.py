@@ -1,84 +1,104 @@
-import paho.mqtt.client as mqtt
 import time
+import random
+import string
 
 class AclCheck:
-    def __init__(self, host, port=1883, username=None, password=None):
+    def __init__(self, client, logger=None, timeout=5):
         """
-        Inisialisasi Pengecek ACL.
+        Inisialisasi pengecekan ACL aktif melalui pengujian publish + subscribe ke topik buatan.
         Args:
-            host (str): Alamat IP broker.
-            port (int): Port broker.
-            username (str): Username untuk otentikasi.
-            password (str): Password untuk otentikasi.
+            client (mqtt.Client): Client MQTT aktif dari enum().
+            logger (function): Fungsi log opsional.
+            timeout (int): Waktu tunggu untuk menerima pesan balik.
         """
-        self.host = host
-        self.port = port
-        self.username = username
-        self.password = password
-        self.client = mqtt.Client(client_id="penmqtt_acl_checker")
-        self.detected_topics = []
-        self.connection_status = -1
-        
-        # Atur callback
-        self.client.on_connect = self._on_connect
-        self.client.on_message = self._on_message
+        self.client = client
+        self.logger = logger
+        self.timeout = timeout
+        self.test_topics = [f"aclcheck/test/{i}" for i in range(10)]
+        self.received = set()
+        self.subscribe_success = set()
+        self.publish_success = set()
 
-    def _on_connect(self, client, userdata, flags, rc):
-        """Callback saat terhubung."""
-        self.connection_status = rc
-        if rc == 0:
-            # Berlangganan ke semua topik jika koneksi berhasil
-            client.subscribe("#", qos=0)
+    def log(self, msg):
+        if self.logger:
+            self.logger(msg)
         else:
-            # Jika koneksi gagal, langsung hentikan loop
-            client.loop_stop()
+            print(msg)
 
     def _on_message(self, client, userdata, msg):
-        """Callback saat menerima pesan."""
-        if msg.topic not in self.detected_topics:
-            self.detected_topics.append(msg.topic)
+        """Callback ketika menerima pesan dari broker."""
+        decoded = msg.payload.decode(errors='ignore')
+        self.log(f"[✓] Pesan diterima dari broker: {msg.topic} = {decoded}")
+        self.received.add(msg.topic)
 
     def run(self):
         """
-        Menjalankan proses pengecekan ACL.
+        Jalankan pengujian ACL aktif: subscribe + publish lalu cek apakah pesan balik diterima.
         Returns:
-            str: Hasil pengecekan dalam bentuk string untuk ditampilkan di UI.
+            Tuple[str, bool]: (output string untuk laporan/log, acl_is_strict)
         """
         output = []
+        acl_is_strict = False
+
         try:
-            output.append(f"[*] Mencoba terhubung ke {self.host}:{self.port}...")
-            
-            if self.username and self.password:
-                self.client.username_pw_set(self.username, self.password)
+            self.client.on_message = self._on_message
+            self.log("[*] Mulai pengecekan ACL aktif menggunakan topik buatan...")
 
-            # Koneksi dengan timeout
-            self.client.connect(self.host, self.port, 60)
-            
-            # Jalankan loop di background
-            self.client.loop_start()
-
-            # Beri waktu 5 detik untuk koneksi dan menerima pesan
-            time.sleep(5)
-            
-            # Hentikan loop
-            self.client.loop_stop()
-            self.client.disconnect()
-
-            # Analisis hasil koneksi
-            if self.connection_status == 0:
-                output.append("[+] Koneksi Berhasil!")
-                if self.detected_topics:
-                    output.append("[!] ACL Lemah! Topik berhasil dideteksi tanpa otorisasi spesifik:")
-                    output.extend([f"    - {topic}" for topic in self.detected_topics])
+            # 1. Subscribe ke topik uji
+            self.log("[*] Subscribe ke 10 topik uji...")
+            for topic in self.test_topics:
+                res, _ = self.client.subscribe(topic)
+                if res == 0:
+                    self.subscribe_success.add(topic)
+                    self.log(f"[✓] Subscribe OK: {topic}")
                 else:
-                    output.append("[+] ACL Kuat. Tidak ada topik yang terdeteksi dari langganan ke '#'.")
-            elif self.connection_status == 5:
-                output.append("[-] Koneksi Gagal: Otorisasi Ditolak (Not authorized).")
-                output.append("[*] Info: Broker memerlukan username/password yang valid.")
+                    self.log(f"[!] Gagal subscribe: {topic} | res={res}")
+
+            if not self.subscribe_success:
+                output.append("[!] Semua subscribe gagal. Kemungkinan ACL aktif memblokir subscribe.")
+                return "\n".join(output), True
+
+            self.client.loop_start()
+            time.sleep(0.5)  # waktu jeda agar subscribe stabil
+
+            # 2. Publish ke topik uji
+            self.log("[*] Publish pesan uji ke topik...")
+            for topic in self.subscribe_success:
+                payload = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+                result = self.client.publish(topic, payload)
+                if result.rc == 0:
+                    self.publish_success.add(topic)
+                    self.log(f"[✓] Publish OK: {topic} = {payload}")
+                else:
+                    self.log(f"[!] Gagal publish: {topic} | rc={result.rc}")
+
+            if not self.publish_success:
+                output.append("[!] Semua publish gagal. Kemungkinan ACL aktif memblokir publish.")
+                self.client.loop_stop()
+                return "\n".join(output), True
+
+            # 3. Tunggu pesan kembali dari broker
+            self.log("[*] Menunggu pesan masuk dari broker...")
+            start_time = time.time()
+            while time.time() - start_time < self.timeout:
+                if self.received >= self.publish_success:
+                    break
+                time.sleep(0.1)
+
+            self.client.loop_stop()
+
+            # 4. Evaluasi hasil akhir
+            if self.received:
+                output.append("[✓] ACL Lemah! Pesan berhasil diterima dari topik:")
+                for t in sorted(self.received):
+                    output.append(f"    - {t}")
+                acl_is_strict = False
             else:
-                 output.append(f"[-] Koneksi Gagal dengan kode: {self.connection_status}")
+                output.append("[+] ACL Kuat. Tidak ada pesan yang dikembalikan dari broker.")
+                acl_is_strict = True
 
         except Exception as e:
-            output.append(f"[!] Terjadi kesalahan: {str(e)}")
-        
-        return "\n".join(output)
+            output.append(f"[!] Terjadi kesalahan saat pengecekan ACL: {str(e)}")
+            acl_is_strict = True
+
+        return "\n".join(output), acl_is_strict

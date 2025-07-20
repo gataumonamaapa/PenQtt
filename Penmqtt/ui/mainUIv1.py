@@ -4,6 +4,7 @@ import threading
 import sqlite3
 from datetime import datetime
 import traceback
+import time
 
 # Tambahkan parent folder ke path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -58,7 +59,7 @@ class PenMQTT(QMainWindow):
         self.brute_value = 0
         self.fuzzing_value = 0
         self.dos_value = 0
-
+        self.waiting_for_manual_input = False
         self.setWindowTitle("PenMQTT")
         self.resize(1920, 1080)  # Set window size to 1920x1080
         self.setStyleSheet("""
@@ -585,7 +586,61 @@ class PenMQTT(QMainWindow):
         # Process events to update UI
         QApplication.processEvents()
 
-    def prompt_manual_credentials(self, broker_ip=None, enum=None, port=None, require_prompt=False):
+    def on_need_manual_credentials(self, broker_ip, enum, port):
+        self.id_input.clear()
+        self.pass_input.clear()
+        self.waiting_for_manual_input = True
+        self.prompt_manual_credentials(broker_ip, enum, port)
+
+    # def prompt_manual_credentials(self, broker_ip=None, enum=None, port=None, require_prompt=True):
+    #     if not hasattr(self, 'current_device') or self.current_device is None:
+    #         QMessageBox.warning(self, "No Device Selected", "Please select a device first.")
+    #         return
+
+    #     if require_prompt:
+    #         result = QMessageBox.question(
+    #             self,
+    #             "Input Manual Dibutuhkan",
+    #             "Brute force gagal.\nApakah Anda ingin melanjutkan dengan kredensial manual dari input form?",
+    #             QMessageBox.Yes | QMessageBox.No
+    #         )
+    #         if result != QMessageBox.Yes:
+    #             self._update_attack_report("[!] Pengguna membatalkan pentest.\n")
+    #             self.stop_automated_status_cycle()
+    #             return
+
+    #     username = self.id_input.text().strip()
+    #     password = self.pass_input.text().strip()
+
+    #     if username and password:
+    #         self.manual_credentials = (username, password)
+    #         self._update_attack_report(f"[✓] Menggunakan input manual: {username}:{password}\n")
+    #         QMessageBox.information(self, "Credentials Entered", 
+    #             f"Credentials entered for {self.current_device['name']}:\nUsername: {username}")
+
+    #         if hasattr(self, 'pentest_worker'):
+    #             self.pentest_worker.manual_credentials = (username, password)
+
+    #             # Hanya kirim continue_signal jika memang diminta manual sebelumnya
+    #             if self.waiting_for_manual_input:
+    #                 self.pentest_worker.continue_signal.emit()
+    #                 self.waiting_for_manual_input = False
+
+    #         if broker_ip and enum:
+    #             use_tls = (port == 8883)
+    #             topics = enum.enum(broker_ip, username, password, port=port, use_tls=use_tls)
+    #             self.topics = topics
+
+    #         self.add_log_entry(
+    #             self.current_device['name'],
+    #             "Credentials",
+    #             f"Entered credentials for {self.current_device['ip']}",
+    #             "Succeed"
+    #         )
+    #     else:
+    #         self._update_attack_report("[!] Input manual belum diisi. Batalkan pentest.\n")
+    #         self.stop_automated_status_cycle()
+    def prompt_manual_credentials(self, broker_ip=None, enum=None, port=None, require_prompt=True):
         if not hasattr(self, 'current_device') or self.current_device is None:
             QMessageBox.warning(self, "No Device Selected", "Please select a device first.")
             return
@@ -608,11 +663,19 @@ class PenMQTT(QMainWindow):
         if username and password:
             self.manual_credentials = (username, password)
             self._update_attack_report(f"[✓] Menggunakan input manual: {username}:{password}\n")
+            QMessageBox.information(
+                self,
+                "Credentials Entered",
+                f"Credentials entered for {self.current_device['name']}:\nUsername: {username}"
+            )
 
-            if broker_ip and enum:
-                use_tls = (port == 8883)
-                topics = enum.enum(broker_ip, username, password, port=port, use_tls=use_tls)
-                self.topics = topics
+            if hasattr(self, 'pentest_worker'):
+                self.pentest_worker.manual_credentials = (username, password)
+
+                # Hanya lanjutkan kalau memang sedang menunggu input
+                if self.waiting_for_manual_input:
+                    self.pentest_worker.continue_signal.emit()
+                    self.waiting_for_manual_input = False
 
             self.add_log_entry(
                 self.current_device['name'],
@@ -620,18 +683,12 @@ class PenMQTT(QMainWindow):
                 f"Entered credentials for {self.current_device['ip']}",
                 "Succeed"
             )
-
-            if not require_prompt:
-                QMessageBox.information(self, "Credentials Entered", 
-                                    f"Credentials entered for {self.current_device['name']}:\nUsername: {username}")
-
-            # Tambahan penting ini:
-            if hasattr(self, 'pentest_worker'):
-                self.pentest_worker.manual_credentials = (username, password)
-                self.pentest_worker.run()
         else:
             self._update_attack_report("[!] Input manual belum diisi. Batalkan pentest.\n")
+            self.id_input.clear()
+            self.pass_input.clear()
             self.stop_automated_status_cycle()
+
     
     def add_log_entry(self, device, subject, description, status):
         from datetime import datetime
@@ -700,7 +757,7 @@ class PenMQTT(QMainWindow):
         self.pentest_worker.log.connect(self.append_to_report_text)
         self.pentest_worker.status.connect(lambda s: safe_set_label_text(self.status_info, s))
         self.pentest_worker.done.connect(self._on_pentest_finished)
-        self.pentest_worker.need_manual_credentials.connect(self.prompt_manual_credentials)
+        self.pentest_worker.need_manual_credentials.connect(self.on_need_manual_credentials)
         self.pentest_worker.log_entry.connect(self.add_log_entry) # Tambahan baru 22.19
 
         self.pentest_thread.started.connect(self.pentest_worker.run)
@@ -785,26 +842,38 @@ class PentestWorker(QObject):
             self.status.emit("Running...")
             acl_summary = "Pengecekan ACL tidak dilakukan."
 
-            if getattr(self, "waiting_for_manual", False):
+            # Cek apakah enum sebelumnya sudah pernah sukses
+            if hasattr(self, "cached_topics") and self.cached_topics:
+                self.log.emit("[~] Topik sebelumnya sudah ditemukan. Gunakan cached.\n")
+                topics = self.cached_topics
+                credentials = self.manual_credentials
+                goto_enum = False
+            elif getattr(self, "waiting_for_manual", False):
                 self.waiting_for_manual = False
                 username, password = self.manual_credentials
                 broker_ip, port = self.broker_info
                 enum = self.enum
-
                 self.log.emit(f"[✓] Melanjutkan dengan input manual: {username}:{password}\n")
 
-                while True:
+                # Tambahan patch: retry enum hingga 3 kali jika gagal
+                topics = None
+                for attempt in range(3):
                     try:
                         topics = enum.enum(broker_ip, username, password, port)
                         if topics:
+                            self.cached_topics = topics  # Simpan agar tidak enum ulang
                             break
-                        else:
-                            raise Exception("Tidak ada topik ditemukan.")
+                        self.log.emit(f"[!] Tidak ada topik ditemukan (percobaan ke-{attempt+1})\n")
+                        time.sleep(1)
                     except Exception as e:
-                        self.log.emit(f"[!] Kredensial salah atau gagal enum: {str(e)}\n")
-                        self.waiting_for_manual = True
-                        self.need_manual_credentials.emit(broker_ip, enum, port)
-                        return
+                        self.log.emit(f"[!] Gagal enum (percobaan ke-{attempt+1}): {str(e)}\n")
+                        time.sleep(1)
+
+                if not topics:
+                    self.log.emit("[!] Gagal enum setelah 3 kali percobaan. Meminta ulang input manual.\n")
+                    self.waiting_for_manual = True
+                    self.need_manual_credentials.emit(broker_ip, enum, port)
+                    return
 
                 credentials = (username, password)
 
@@ -825,12 +894,10 @@ class PentestWorker(QObject):
                 enum = MQTTEnumerator(logger=lambda msg: self.log.emit(msg))
                 topics = enum.enum(broker_ip, port=port)
 
-                # Ambil kredensial jika ditemukan selama enum
                 if hasattr(enum, "valid_credentials") and enum.valid_credentials:
                     credentials = enum.valid_credentials
                     self.log.emit(f"[✓] Menggunakan kredensial enum: {credentials[0]}:{credentials[1]}\n")
                     self.log_entry.emit(self.device_name, "BruteForce", f"Kredensial: {credentials[0]}:{credentials[1]}", "Succeed")
-
                 elif topics:
                     credentials = (None, None)
                 else:
@@ -841,26 +908,40 @@ class PentestWorker(QObject):
                     self.need_manual_credentials.emit(broker_ip, enum, port)
                     self.log_entry.emit(self.device_name, "BruteForce", f"Device selected: {self.ip}", "Failed")
                     return
-                
-            self.log.emit("➤ Menjalankan Pengecekan ACL...\n")
-            acl_checker = AclCheck(host=broker_ip, port=port)
-            acl_summary = acl_checker.run() # Jalankan dan simpan hasilnya
-            self.log.emit(acl_summary + "\n\n") # Tampilkan hasil di log UI
-            self.log_entry.emit(self.device_name, "ACL Check", f"Pengecekan pada {broker_ip}", "Succeed")   
-            
-            self.log.emit("➤ Jalankan Fuzzing...\n")
-            fuzzer = Fuzzer(broker_ip,port, *credentials, logger=lambda msg: self.log.emit(msg))
-            fuzzer.run(topics)
-            self.log_entry.emit(self.device_name, "Fuzzing", f"Device selected: {self.ip}", "Succeed")
-                    
-            self.log.emit("➤ Uji Delay QoS...\n")
-            qos = QoSTester(broker_ip,port, *credentials, logger=lambda msg: self.log.emit(msg))
-            qos_summary = qos.run()
-            self.log_entry.emit(self.device_name, "QoS", f"Device selected: {self.ip}", "Succeed")
 
-            self.log.emit("➤ Jalankan Subscribe Flood (DoS)...\n")
-            dos = DoSFlooder(broker_ip,port, *credentials, logger=lambda msg: self.log.emit(msg))
-            dos.run()
+                self.cached_topics = topics
+
+            self.log.emit("➤ Menjalankan Pengecekan ACL...\n")
+            acl_checker = AclCheck(client=enum.last_successful_client, logger=lambda msg: self.log.emit(msg))
+            acl_summary_text, acl_is_strict = acl_checker.run()
+            self.log.emit(acl_summary_text + "\n\n")
+            self.log_entry.emit(self.device_name, "ACL Check", f"Pengecekan pada {broker_ip}", "Succeed")
+
+            self.log.emit("➤ Jalankan Fuzzing...\n")
+            fuzzer = Fuzzer(broker_ip, port, *credentials, logger=lambda msg: self.log.emit(msg))
+            fuzzer.run(self.cached_topics)
+            self.log_entry.emit(self.device_name, "Fuzzing", f"Device selected: {self.ip}", "Succeed")
+
+            if not acl_is_strict:
+                self.log.emit("➤ Uji Delay QoS...\n")
+                qos = QoSTester(broker_ip, port, *credentials, logger=lambda msg: self.log.emit(msg))
+                qos_summary = qos.run()
+                self.log_entry.emit(self.device_name, "QoS", f"Device selected: {self.ip}", "Succeed")
+
+                self.log.emit("➤ Jalankan Subscribe Flood (DoS)...\n")
+                dos = DoSFlooder(broker_ip, port, *credentials, logger=lambda msg: self.log.emit(msg))
+                flood_result = dos.run()
+
+                flood_info = {
+                    "topic_count": flood_result["total_topics"],
+                    "messages_per_topic": flood_result["total_messages"],
+                    "payload_size_kb": flood_result["payload_size_kb"],
+                    "reason": flood_result["reason"]
+                }
+            else:
+                self.log.emit("[!] ACL aktif — QoS Delay dan DoS mungkin diblokir oleh broker.\n")
+                qos_summary = {"0": -1, "1": -1, "2": -1}
+                flood_info = {"topic_count": 0, "messages_per_topic": 0}
 
             self.log.emit("➤ Membuat laporan...\n")
             report_path = f"report_{broker_ip.replace('.', '_')}.pdf"
@@ -869,12 +950,12 @@ class PentestWorker(QObject):
                 broker_ip=broker_ip,
                 username=credentials[0],
                 password=credentials[1],
-                topics=topics,
+                topics=self.cached_topics,
                 fuzz_count=20,
-                flood_info={"topic_count": "1000", "messages_per_topic": "3000"},
+                flood_info=flood_info,
                 qos_delay_summary=qos_summary,
                 use_tls=(port == 8883),
-                acl_summary=acl_summary  # <- Tambahan ini
+                acl_summary=acl_summary_text
             )
 
             ReportDatabase.save_report(broker_ip, report_path)
@@ -883,6 +964,8 @@ class PentestWorker(QObject):
             self.log.emit("[✓] Pentest selesai. Laporan telah dibuat.\n")
             self.done.emit(self.ip, self.device_name, "Succeed")
             self.log_entry.emit(self.device_name, "Report Generated", f"Report Saved at {report_path}", "Succeed")
+
+            enum.cleanup()
 
         except Exception as e:
             self.log.emit(f"[ERROR] {str(e)}")

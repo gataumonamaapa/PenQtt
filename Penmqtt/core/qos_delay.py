@@ -1,64 +1,96 @@
 import time
-import random
-from paho.mqtt import client as mqtt
+import paho.mqtt.client as mqtt
 from core.tls_utils import setup_tls_context
 
-
 class QoSTester:
-    def __init__(self, broker_ip, port=1883,username=None, password=None, retain=False, delay=0.005, logger=None,  use_tls=False, allow_insecure=True):
-        self.broker_ip = broker_ip
+    def __init__(self, host, port=1883, username=None, password=None, logger=print):
+        self.host = host
         self.port = port
-        self.use_tls = use_tls
         self.username = username
         self.password = password
-        self.retain = retain
-        self.delay = delay
-        self.result = {}
         self.logger = logger
-        self.allow_insecure = allow_insecure
+        self.qos_results = {}
 
-    def log(self, msg):
+    def log(self, message):
         if self.logger:
-            self.logger(msg)
+            self.logger(message)
+
+    def on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            self.connected = True
         else:
-            print(msg)
+            self.connected = False
+
+    def on_publish(self, client, userdata, mid):
+        self.end_time = time.time()
+
+    def test_qos(self, qos_level):
+        
+        topic = f"qos_test/topic_{qos_level}"
+        payload = f"test message with qos {qos_level}"
+        client = mqtt.Client()
+        setup_tls_context(client, allow_insecure=True, logger=self.log)
+        if self.username and self.password:
+            client.username_pw_set(self.username, self.password)
+
+        client.on_connect = self.on_connect
+        client.on_publish = self.on_publish
+
+        self.connected = False
+        self.end_time = None
+        start_time = time.time()
+
+        try:
+            client.connect(self.host, self.port, 60)
+            client.loop_start()
+            timeout = time.time() + 5
+            while not self.connected and time.time() < timeout:
+                time.sleep(0.1)
+
+            if not self.connected:
+                self.log(f"[!] Gagal koneksi ke broker pada QoS {qos_level}.")
+                client.loop_stop()
+                return -1
+
+            self.start_time = time.time()
+            result, mid = client.publish(topic, payload, qos=qos_level)
+
+            timeout = time.time() + 5
+            while self.end_time is None and time.time() < timeout:
+                time.sleep(0.1)
+
+            client.loop_stop()
+            if self.end_time:
+                delay = round(self.end_time - self.start_time, 4)
+                return delay
+            else:
+                return -1
+
+        except Exception as e:
+            self.log(f"[!] Error saat pengujian QoS {qos_level}: {str(e)}")
+            return -1
 
     def run(self):
-        for qos in [0, 1, 2]:
-            client = mqtt.Client()
+        self.log("[*] Mengirim pesan ke topik qos_test/topic_0 dengan QoS 0...")
+        delay_0 = self.test_qos(0)
+        self.log(f"[✓] Rata-rata delay QoS 0: {delay_0} detik")
 
-            if self.username and self.password:
-                client.username_pw_set(self.username, self.password)
+        self.log("[*] Mengirim pesan ke topik qos_test/topic_1 dengan QoS 1...")
+        delay_1 = self.test_qos(1)
+        self.log(f"[✓] Rata-rata delay QoS 1: {delay_1} detik")
 
-            if self.use_tls:
-                try:
-                    setup_tls_context(client, allow_insecure=self.allow_insecure, logger=self.logger)
-                except Exception as e:
-                    self.log(f"[!] Gagal set TLS context: {e}")
-                    continue
+        self.log("[*] Mengirim pesan ke topik qos_test/topic_2 dengan QoS 2...")
+        delay_2 = self.test_qos(2)
+        self.log(f"[✓] Rata-rata delay QoS 2: {delay_2} detik")
 
-            try:
-                client.connect(self.broker_ip, self.port, 60)
-            except Exception as e:
-                self.log(f"[!] Gagal koneksi ke broker ({self.broker_ip}:{self.port}): {e}")
-                continue
+        self.qos_results = {
+            "0": delay_0,
+            "1": delay_1,
+            "2": delay_2
+        }
 
-            topic = f"qos_test/topic_{qos}"
-            self.log(f"[*] Mengirim pesan ke topik {topic} dengan QoS {qos}...")
+        self.log("\n[•] Hasil Pengujian Delay QoS:")
+        for level in ["0", "1", "2"]:
+            self.log(f"   - QoS {level}: {self.qos_results[level]} detik")
 
-            start = time.time()
-            for i in range(10):
-                payload = f"Test QoS {qos} #{i} - {random.randint(1000,9999)}"
-                client.publish(topic, payload, qos=qos, retain=self.retain)
-                time.sleep(self.delay)
-            end = time.time()
-
-            elapsed = round(end - start, 4)
-            self.result[qos] = elapsed
-            self.log(f"[✓] Selesai QoS {qos} dalam {elapsed} detik")
-            client.disconnect()
-
-        self.log(f"\n[•] Hasil Pengujian Delay QoS:")
-        for qos, delay in self.result.items():
-            self.log(f"   - QoS {qos}: {delay} detik")
-        return self.result
+        return self.qos_results
