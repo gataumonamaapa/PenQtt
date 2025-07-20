@@ -923,6 +923,7 @@ class PentestWorker(QObject):
             self.log_entry.emit(self.device_name, "Fuzzing", f"Device selected: {self.ip}", "Succeed")
 
             if not acl_is_strict:
+                use_tls = (port == 8883)
                 self.log.emit("➤ Uji Delay QoS...\n")
                 qos = QoSTester(broker_ip, port, *credentials, logger=lambda msg: self.log.emit(msg))
                 qos_summary = qos.run()
@@ -933,8 +934,8 @@ class PentestWorker(QObject):
                 flood_result = dos.run()
 
                 flood_info = {
-                    "topic_count": flood_result["total_topics"],
-                    "messages_per_topic": flood_result["total_messages"],
+                    "total_topics": flood_result["total_topics"],
+                    "total_messages": flood_result["total_messages"],
                     "payload_size_kb": flood_result["payload_size_kb"],
                     "reason": flood_result["reason"]
                 }

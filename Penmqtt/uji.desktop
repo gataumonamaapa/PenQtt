@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=PenMQTT
-Comment=MQTT Pentest Tool Launcher
-Exec=/home/moon/pentest/github/PenQtt18jul/Penmqtt/bas.sh
-Icon=/home/moon/pentest/github/PenQtt18jul/Penmqtt/assets/icon2.jpeg
-Terminal=true
-Type=Application
-Categories=Utility;
-Path=/home/moon/pentest/github/PenQtt18jul/Penmqtt
