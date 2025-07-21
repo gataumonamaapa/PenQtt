@@ -15,6 +15,12 @@ Aplikasi ini bertujuan untuk melakukan uji pentest mandiri ke perangkat IoT kali
 
 Sekian, dan selamat menikmati
 
+**Tutorial menjalankan aplikasi:
+1. Masuk ke folder PenMqtt
+2. Jalankan command ini di terminal : sudo chmod +x uji.sh
+3. Jalankan command ini di terminal : ./uji.sh
+4. Double klik di uji.desktop**
+
+   
 P.S : 
-Anda dapat menambahkan username dan password yang ingin dijadika wordlist pada Penmqtt/assest/wordlist.txt dengan format username:password
 Aplikasi ini sudah diuji keamanan penggunannya, dan segala kerusakan terhadap perangkat yang diuji akibat diubahnya kode bukan tanggung jawab pembuat. 
