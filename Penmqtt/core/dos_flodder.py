@@ -23,7 +23,7 @@ class DoSFlooder:
         return f"flood/topic_{i}_" + ''.join(random.choices(string.ascii_letters, k=5))
 
     def run(self, max_delay=1.0):
-        self.log("[*] Memulai DoS flood hingga delay > 1 detik")
+        self.log(f"[*] Memulai DoS flood hingga delay > {max_delay} detik")
 
         errors = 0
         payload = "x" * 32  # 32 bytes

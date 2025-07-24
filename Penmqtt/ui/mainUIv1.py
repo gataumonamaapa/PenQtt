@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QFrame, QTableWidget,
     QTableWidgetItem, QScrollArea, QTextEdit, QStackedWidget,
-    QMessageBox,QFileDialog
+    QMessageBox,QFileDialog,QInputDialog,QSizePolicy
+
 )
 
 # PySide6 GUI
@@ -55,7 +56,8 @@ class PenMQTT(QMainWindow):
         self._active_threads = []
         self._active_workers = []
 
-        self.sniff_value = 0
+        self.dos_max_delay = 2.0  # default value
+        self.qos_value = 0
         self.brute_value = 0
         self.fuzzing_value = 0
         self.dos_value = 0
@@ -140,11 +142,47 @@ class PenMQTT(QMainWindow):
         # Left side (Section 1)
         left_layout = QVBoxLayout()
         
-        # Logo
-        logo_label = QLabel("PenMQTT")
-        logo_label.setAlignment(Qt.AlignCenter)
-        logo_label.setStyleSheet("font-size: 24px; font-weight: bold; background-color: #e0e0e0; border-radius: 20px; padding: 10px; color: black;")
-        left_layout.addWidget(logo_label)
+        # === Logo section container ===
+        logo_layout = QHBoxLayout()
+
+        logo_frame = QFrame()
+        logo_frame.setObjectName("logoFrame")
+        logo_frame.setStyleSheet("""
+            QFrame#logoFrame {
+                background-color: #e0e0e0;
+                border-radius: 20px;
+                padding: 10px;
+            }
+        """)
+        logo_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        logo_text = QLabel("PenMQTT", logo_frame)
+        logo_text.setStyleSheet("font-size: 24px; font-weight: bold; color: black;")
+        logo_text.setAlignment(Qt.AlignCenter)
+
+        logo_inner_layout = QHBoxLayout(logo_frame)
+        logo_inner_layout.setContentsMargins(5, 0, 5, 0)
+        logo_inner_layout.addWidget(logo_text)
+
+        # === Button
+        dos_config_button = QPushButton("⚙️")
+        dos_config_button.setFixedSize(32, 32)
+        dos_config_button.setStyleSheet("""
+            QPushButton {
+                background-color: #d9f7be;
+                color: black;
+                border-radius: 8px;
+                font-size: 16px;
+            }
+        """)
+        dos_config_button.clicked.connect(self.configure_dos_delay)
+
+        # === Assemble layout
+        logo_layout.addWidget(logo_frame)
+        logo_layout.addWidget(dos_config_button)
+
+        left_layout.addLayout(logo_layout)
+        
         # Section 1: Network scanning section
         section1 = QFrame()
         section1.setObjectName("section")
@@ -238,7 +276,7 @@ class PenMQTT(QMainWindow):
 
         # Status indicators in a row
         status_indicators_layout = QHBoxLayout()
-        self.status_types = ["BruteForce", "Sniffing", "Fuzzing", "DoS"]
+        self.status_types = ["BruteForce", "Fuzzing", "QoS", "DoS"]
         self.status_indicators = {}
 
         for status_type in self.status_types: 
@@ -541,7 +579,7 @@ class PenMQTT(QMainWindow):
     
     def refresh_status_bar(self):
         status_map = {
-            "Sniffing": self.sniff_value,
+            "QoS": self.qos_value,
             "BruteForce": self.brute_value,
             "Fuzzing": self.fuzzing_value,
             "DoS": self.dos_value
@@ -565,8 +603,8 @@ class PenMQTT(QMainWindow):
                 """)
 
     def handle_status_update(self, name, value):
-        if name == "Sniffing":
-            self.sniff_value = value
+        if name == "QoS":
+            self.qos_value = value
         elif name == "BruteForce":
             self.brute_value = value
         elif name == "Fuzzing":
@@ -592,66 +630,45 @@ class PenMQTT(QMainWindow):
         self.waiting_for_manual_input = True
         self.prompt_manual_credentials(broker_ip, enum, port)
 
-    # def prompt_manual_credentials(self, broker_ip=None, enum=None, port=None, require_prompt=True):
-    #     if not hasattr(self, 'current_device') or self.current_device is None:
-    #         QMessageBox.warning(self, "No Device Selected", "Please select a device first.")
-    #         return
-
-    #     if require_prompt:
-    #         result = QMessageBox.question(
-    #             self,
-    #             "Input Manual Dibutuhkan",
-    #             "Brute force gagal.\nApakah Anda ingin melanjutkan dengan kredensial manual dari input form?",
-    #             QMessageBox.Yes | QMessageBox.No
-    #         )
-    #         if result != QMessageBox.Yes:
-    #             self._update_attack_report("[!] Pengguna membatalkan pentest.\n")
-    #             self.stop_automated_status_cycle()
-    #             return
-
-    #     username = self.id_input.text().strip()
-    #     password = self.pass_input.text().strip()
-
-    #     if username and password:
-    #         self.manual_credentials = (username, password)
-    #         self._update_attack_report(f"[✓] Menggunakan input manual: {username}:{password}\n")
-    #         QMessageBox.information(self, "Credentials Entered", 
-    #             f"Credentials entered for {self.current_device['name']}:\nUsername: {username}")
-
-    #         if hasattr(self, 'pentest_worker'):
-    #             self.pentest_worker.manual_credentials = (username, password)
-
-    #             # Hanya kirim continue_signal jika memang diminta manual sebelumnya
-    #             if self.waiting_for_manual_input:
-    #                 self.pentest_worker.continue_signal.emit()
-    #                 self.waiting_for_manual_input = False
-
-    #         if broker_ip and enum:
-    #             use_tls = (port == 8883)
-    #             topics = enum.enum(broker_ip, username, password, port=port, use_tls=use_tls)
-    #             self.topics = topics
-
-    #         self.add_log_entry(
-    #             self.current_device['name'],
-    #             "Credentials",
-    #             f"Entered credentials for {self.current_device['ip']}",
-    #             "Succeed"
-    #         )
-    #     else:
-    #         self._update_attack_report("[!] Input manual belum diisi. Batalkan pentest.\n")
-    #         self.stop_automated_status_cycle()
     def prompt_manual_credentials(self, broker_ip=None, enum=None, port=None, require_prompt=True):
         if not hasattr(self, 'current_device') or self.current_device is None:
-            QMessageBox.warning(self, "No Device Selected", "Please select a device first.")
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("No Device Selected")
+            msg.setText("Please select a device first.")
+            msg.setStyleSheet("""
+    QMessageBox QLabel {
+        color: black;
+    }
+    QMessageBox {
+        background-color: white;
+    }
+    QPushButton {
+        color: black;
+    }
+""")
+            msg.exec()
             return
 
         if require_prompt:
-            result = QMessageBox.question(
-                self,
-                "Input Manual Dibutuhkan",
-                "Brute force gagal.\nApakah Anda ingin melanjutkan dengan kredensial manual dari input form?",
-                QMessageBox.Yes | QMessageBox.No
-            )
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Question)
+            msg.setWindowTitle("Input Manual Dibutuhkan")
+            msg.setText("Brute force gagal.\nApakah Anda ingin melanjutkan dengan kredensial manual dari input form?")
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            msg.setStyleSheet("""
+    QMessageBox QLabel {
+        color: white;
+    }
+    QMessageBox {
+        background-color: black;
+    }
+    QPushButton {
+        color: white;
+        background-color: black;
+    }
+""")
+            result = msg.exec()
             if result != QMessageBox.Yes:
                 self._update_attack_report("[!] Pengguna membatalkan pentest.\n")
                 self.stop_automated_status_cycle()
@@ -663,11 +680,24 @@ class PenMQTT(QMainWindow):
         if username and password:
             self.manual_credentials = (username, password)
             self._update_attack_report(f"[✓] Menggunakan input manual: {username}:{password}\n")
-            QMessageBox.information(
-                self,
-                "Credentials Entered",
-                f"Credentials entered for {self.current_device['name']}:\nUsername: {username}"
-            )
+            
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowTitle("Credentials Entered")
+            msg.setText(f"Credentials entered for {self.current_device['name']}:\nUsername: {username}")
+            msg.setStyleSheet("""
+    QMessageBox QLabel {
+        color: white;
+    }
+    QMessageBox {
+        background-color: black;
+    }
+    QPushButton {
+        color: white;
+        background-color: black;
+    }
+""")
+            msg.exec()
 
             if hasattr(self, 'pentest_worker'):
                 self.pentest_worker.manual_credentials = (username, password)
@@ -689,13 +719,14 @@ class PenMQTT(QMainWindow):
             self.pass_input.clear()
             self.stop_automated_status_cycle()
 
+
     
     def add_log_entry(self, device, subject, description, status):
         from datetime import datetime
         
         # Get current timestamp
-        timestamp = datetime.now().strftime("%m/%d/%Y %H:%M")
-        
+        timestamp = datetime.now().strftime("%m/%d/%Y %H:%M:%S.")
+
         # Add new row to log table
         row_position = self.log_table.rowCount()
         self.log_table.insertRow(row_position)
@@ -772,6 +803,97 @@ class PenMQTT(QMainWindow):
         self.stop_automated_status_cycle()
         self.pentest_running = False
 
+    def configure_dos_delay(self):
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Konfigurasi DoS Delay")
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: black;
+            }
+            QLabel {
+                color: white;
+            }
+            QLineEdit {
+                background-color: white;
+                color: black;
+                border: 1px solid gray;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            QPushButton {
+                background-color: white;
+                color: black;
+                padding: 6px;
+                border-radius: 4px;
+            }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        label = QLabel("Berapa lama delay yang diinginkan? (maks: 5 detik):")
+        input_field = QLineEdit()
+        input_field.setPlaceholderText("Contoh: 1.5")
+
+        button_ok = QPushButton("OK")
+        button_cancel = QPushButton("Batal")
+
+        layout.addWidget(label)
+        layout.addWidget(input_field)
+        layout.addWidget(button_ok)
+        layout.addWidget(button_cancel)
+
+        def validate_input():
+            try:
+                value = float(input_field.text())
+                if 0 < value <= 5:
+                    self.dos_max_delay = value
+                    msg = QMessageBox(self)
+                    msg.setIcon(QMessageBox.Information)
+                    msg.setWindowTitle("Berhasil")
+                    msg.setText(f"Delay DoS diatur ke {value} detik.")
+                    msg.setStyleSheet("""
+                        QMessageBox {
+                            background-color: black;
+                        }
+                        QLabel {
+                            color: white;
+                        }
+                        QPushButton {
+                            color: white;
+                            background-color: black;
+                        }
+                    """)
+                    msg.exec()
+                else:
+                    raise ValueError
+            except ValueError:
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Warning)
+                msg.setWindowTitle("Input Tidak Valid")
+                msg.setText("Masukkan angka antara 0.1 sampai 5.0 detik.")
+                msg.setStyleSheet("""
+                    QMessageBox {
+                        background-color: black;
+                    }
+                    QLabel {
+                        color: white;
+                    }
+                    QPushButton {
+                        color: white;
+                        background-color: black;
+                    }
+                """)
+                msg.exec()
+
+        button_ok.clicked.connect(validate_input)
+        button_cancel.clicked.connect(dialog.reject)
+
+        dialog.exec()
+
+
+
+
 class ReportDatabase:
     DB_FILE = "pentest_reports.db"
 
@@ -836,12 +958,18 @@ class PentestWorker(QObject):
         self.continue_signal.connect(self.run)
         ReportDatabase.init_db()
 
+    def get_ui_dos_delay(self):
+        app = QApplication.instance()
+        window = app.activeWindow()
+        return getattr(window, "dos_max_delay", 2.0)
+
+
     def run(self):
         try:
             self.log.emit("Menjalankan pentest bertahap...\n")
             self.status.emit("Running...")
             acl_summary = "Pengecekan ACL tidak dilakukan."
-
+            self.status_update.emit("BruteForce", 1)
             # Cek apakah enum sebelumnya sudah pernah sukses
             if hasattr(self, "cached_topics") and self.cached_topics:
                 self.log.emit("[~] Topik sebelumnya sudah ditemukan. Gunakan cached.\n")
@@ -876,7 +1004,7 @@ class PentestWorker(QObject):
                     return
 
                 credentials = (username, password)
-
+            
             else:
                 scanner = NetworkScanner()
                 interface = scanner.interface
@@ -894,44 +1022,68 @@ class PentestWorker(QObject):
                 enum = MQTTEnumerator(logger=lambda msg: self.log.emit(msg))
                 topics = enum.enum(broker_ip, port=port)
 
+                
+
                 if hasattr(enum, "valid_credentials") and enum.valid_credentials:
+                    self.status_update.emit("BruteForce", 1)
                     credentials = enum.valid_credentials
                     self.log.emit(f"[✓] Menggunakan kredensial enum: {credentials[0]}:{credentials[1]}\n")
                     self.log_entry.emit(self.device_name, "BruteForce", f"Kredensial: {credentials[0]}:{credentials[1]}", "Succeed")
+                    self.status_update.emit("BruteForce", 0)
                 elif topics:
                     credentials = (None, None)
                 else:
+                    self.status_update.emit("BruteForce", 1)
                     self.log.emit("[!] Gagal enum. Menunggu input manual...\n")
                     self.enum = enum
                     self.broker_info = (broker_ip, port)
                     self.waiting_for_manual = True
                     self.need_manual_credentials.emit(broker_ip, enum, port)
                     self.log_entry.emit(self.device_name, "BruteForce", f"Device selected: {self.ip}", "Failed")
+                    self.status_update.emit("BruteForce", 0)
                     return
 
+                
                 self.cached_topics = topics
-
+            self.status_update.emit("BruteForce", 0)
             self.log.emit("➤ Menjalankan Pengecekan ACL...\n")
             acl_checker = AclCheck(client=enum.last_successful_client, logger=lambda msg: self.log.emit(msg))
             acl_summary_text, acl_is_strict = acl_checker.run()
             self.log.emit(acl_summary_text + "\n\n")
             self.log_entry.emit(self.device_name, "ACL Check", f"Pengecekan pada {broker_ip}", "Succeed")
 
+            self.status_update.emit("Fuzzing", 1)
             self.log.emit("➤ Jalankan Fuzzing...\n")
             fuzzer = Fuzzer(broker_ip, port, *credentials, logger=lambda msg: self.log.emit(msg))
             fuzzer.run(self.cached_topics)
             self.log_entry.emit(self.device_name, "Fuzzing", f"Device selected: {self.ip}", "Succeed")
+            self.status_update.emit("Fuzzing", 0)
 
             if not acl_is_strict:
                 use_tls = (port == 8883)
+                self.status_update.emit("QoS", 1)
                 self.log.emit("➤ Uji Delay QoS...\n")
                 qos = QoSTester(broker_ip, port, *credentials, logger=lambda msg: self.log.emit(msg))
                 qos_summary = qos.run()
                 self.log_entry.emit(self.device_name, "QoS", f"Device selected: {self.ip}", "Succeed")
+                self.status_update.emit("QoS", 0)
 
+                self.status_update.emit("DoS", 1)
                 self.log.emit("➤ Jalankan Subscribe Flood (DoS)...\n")
-                dos = DoSFlooder(broker_ip, port, *credentials, logger=lambda msg: self.log.emit(msg))
-                flood_result = dos.run()
+                # Ambil delay dari UI
+                max_delay = self.get_ui_dos_delay()
+                if max_delay is None:
+                    self.log.emit("[!] DoS Flood dibatalkan oleh pengguna.\n")
+                    flood_info = {"total_topics": 0, "total_messages": 0, "payload_size_kb": 0, "reason": "dibatalkan"}
+                else:
+                    dos = DoSFlooder(broker_ip, port, *credentials, logger=lambda msg: self.log.emit(msg))
+                    flood_result = dos.run(max_delay=self.get_ui_dos_delay())
+                    flood_info = {
+                        "total_topics": flood_result["total_topics"],
+                        "total_messages": flood_result["total_messages"],
+                        "payload_size_kb": flood_result["payload_size_kb"],
+                        "reason": flood_result["reason"]
+    }
 
                 flood_info = {
                     "total_topics": flood_result["total_topics"],
@@ -939,10 +1091,12 @@ class PentestWorker(QObject):
                     "payload_size_kb": flood_result["payload_size_kb"],
                     "reason": flood_result["reason"]
                 }
+                self.status_update.emit("DoS", 0)
             else:
                 self.log.emit("[!] ACL aktif — QoS Delay dan DoS mungkin diblokir oleh broker.\n")
                 qos_summary = {"0": -1, "1": -1, "2": -1}
                 flood_info = {"topic_count": 0, "messages_per_topic": 0}
+                self.status_update.emit("DoS", 0)
 
             self.log.emit("➤ Membuat laporan...\n")
             report_path = f"report_{broker_ip.replace('.', '_')}.pdf"

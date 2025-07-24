@@ -3,11 +3,14 @@ import time
 import paho.mqtt.client as mqtt
 from core.tls_utils import setup_tls_context
 
+# Tambahkan flag tls_logged di BruteForcer
 class BruteForcer:
     def __init__(self, wordlist_path="assets/wordlist.txt", logger=None):
         self.wordlist_path = wordlist_path
         self.logger = logger
         self.found_credential = None
+        self.tls_logged = False  # Flag agar TLS hanya dilog sekali
+
 
     def log(self, message):
         if self.logger:
@@ -21,6 +24,8 @@ class BruteForcer:
 
         with open(self.wordlist_path, encoding='utf-8', errors='ignore') as f:
             creds = [line.strip().split(":") for line in f if ":" in line]
+
+        tls_logged = False  # <== Flag untuk hanya log TLS sekali
 
         for username, password in creds:
             success = {"ok": None}
@@ -36,7 +41,9 @@ class BruteForcer:
             client.on_connect = on_connect
 
             if use_tls:
-                setup_tls_context(client, allow_insecure=True, logger=self.logger)
+                logger_func = self.log if not tls_logged else None
+                setup_tls_context(client, allow_insecure=True, logger=logger_func)
+                tls_logged = True  # Setelah log TLS pertama, flag jadi True
 
             try:
                 client.connect(broker_ip, port, 5)
@@ -62,3 +69,4 @@ class BruteForcer:
                 continue
 
         return None
+
