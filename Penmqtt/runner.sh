@@ -2,7 +2,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-cat > uji.desktop <<EOF
+cat > PenMQTT.desktop <<EOF
 [Desktop Entry]
 Name=PenMQTT
 Comment=MQTT Pentest Tool Launcher
@@ -14,7 +14,7 @@ Categories=Utility;
 Path=$SCRIPT_DIR
 EOF
 
-chmod +x uji.desktop
+chmod +x PenMQTT.desktop
 chmod +x bas.sh
 echo "[✓] Launcher 'PenMQTT.desktop' berhasil dibuat di folder ini."
 echo "[i] Klik kanan > Allow Launching jika di GNOME Desktop."

@@ -846,7 +846,7 @@ class PenMQTT(QMainWindow):
         def validate_input():
             try:
                 value = float(input_field.text())
-                if 0 < value <= 5:
+                if 0 < value <= 15:
                     self.dos_max_delay = value
                     msg = QMessageBox(self)
                     msg.setIcon(QMessageBox.Information)

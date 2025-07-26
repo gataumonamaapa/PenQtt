@@ -22,7 +22,7 @@ class DoSFlooder:
     def _generate_topic(self, i):
         return f"flood/topic_{i}_" + ''.join(random.choices(string.ascii_letters, k=5))
 
-    def run(self, max_delay=1.0):
+    def run(self, max_delay=2.0):
         self.log(f"[*] Memulai DoS flood hingga delay > {max_delay} detik")
 
         errors = 0
@@ -72,7 +72,7 @@ class DoSFlooder:
                 self.log(f"[!] Dihentikan: Delay publish batch {batch_size} topik melebihi {max_delay} detik.")
                 break
 
-            batch_size *= 5  # Eksponensial: 10 ➝ 20 ➝ 40 ➝ 80 dst.
+            batch_size *= 5  
             time.sleep(0.05)
 
         flood_result = {
